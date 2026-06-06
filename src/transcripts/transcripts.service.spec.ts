@@ -71,9 +71,12 @@ describe('TranscriptsService', () => {
     it('calls prisma.transcript.create with content and hash', async () => {
       const dto: CreateTranscriptDto = { content: 'test' };
       const hash = 'deadbeef';
-      const transcript = makeTranscript({ content: dto.content, contentHash: hash });
+      const transcript = makeTranscript({
+        content: dto.content,
+        contentHash: hash,
+      });
 
-      (prisma.transcript.create as jest.Mock).mockResolvedValue(transcript);
+      prisma.transcript.create.mockResolvedValue(transcript);
 
       const result = await service.persistTranscript(dto, hash);
 
@@ -143,7 +146,9 @@ describe('TranscriptsService', () => {
       jest.spyOn(service, 'computeContentHash').mockReturnValue('abc123');
       jest.spyOn(service, 'findByContentHash').mockResolvedValue(null);
       jest.spyOn(service, 'persistTranscript').mockResolvedValue(transcript);
-      jest.spyOn(service, 'enqueueTranscriptJob').mockRejectedValue(new Error('Redis down'));
+      jest
+        .spyOn(service, 'enqueueTranscriptJob')
+        .mockRejectedValue(new Error('Redis down'));
 
       const result = await service.create(dto);
       await Promise.resolve();
@@ -155,18 +160,22 @@ describe('TranscriptsService', () => {
   describe('findOne', () => {
     it('returns the transcript when found', async () => {
       const transcript = makeTranscript();
-      (prisma.transcript.findUnique as jest.Mock).mockResolvedValue(transcript);
+      prisma.transcript.findUnique.mockResolvedValue(transcript);
 
       const result = await service.findOne('uuid-1');
 
-      expect(prisma.transcript.findUnique).toHaveBeenCalledWith({ where: { id: 'uuid-1' } });
+      expect(prisma.transcript.findUnique).toHaveBeenCalledWith({
+        where: { id: 'uuid-1' },
+      });
       expect(result).toStrictEqual(transcript);
     });
 
     it('throws NotFoundException when transcript does not exist', async () => {
-      (prisma.transcript.findUnique as jest.Mock).mockResolvedValue(null);
+      prisma.transcript.findUnique.mockResolvedValue(null);
 
-      await expect(service.findOne('missing-id')).rejects.toThrow(NotFoundException);
+      await expect(service.findOne('missing-id')).rejects.toThrow(
+        NotFoundException,
+      );
       await expect(service.findOne('missing-id')).rejects.toThrow('missing-id');
     });
   });

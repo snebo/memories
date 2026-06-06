@@ -45,7 +45,7 @@ describe('StorageService', () => {
       const bodyMock = {
         transformToString: jest.fn().mockResolvedValue('file contents'),
       };
-      (s3.send as jest.Mock).mockResolvedValue({ Body: bodyMock });
+      s3.send.mockResolvedValue({ Body: bodyMock });
 
       const result = await service.readFile('people/john-doe.md');
 
@@ -55,7 +55,7 @@ describe('StorageService', () => {
 
     it('returns null when the file does not exist (NoSuchKey)', async () => {
       const err = Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' });
-      (s3.send as jest.Mock).mockRejectedValue(err);
+      s3.send.mockRejectedValue(err);
 
       const result = await service.readFile('people/nobody.md');
 
@@ -63,7 +63,7 @@ describe('StorageService', () => {
     });
 
     it('rethrows unexpected S3 errors', async () => {
-      (s3.send as jest.Mock).mockRejectedValue(new Error('Access denied'));
+      s3.send.mockRejectedValue(new Error('Access denied'));
 
       await expect(service.readFile('people/secret.md')).rejects.toThrow(
         'Access denied',
@@ -73,7 +73,7 @@ describe('StorageService', () => {
 
   describe('writeFile', () => {
     it('sends a PutObjectCommand with the correct key and content', async () => {
-      (s3.send as jest.Mock).mockResolvedValue({});
+      s3.send.mockResolvedValue({});
 
       await service.writeFile('topics/ml.md', '# Machine Learning');
 
@@ -91,7 +91,7 @@ describe('StorageService', () => {
 
   describe('listFiles', () => {
     it('returns directories and files at the root when no prefix given', async () => {
-      (s3.send as jest.Mock).mockResolvedValue({
+      s3.send.mockResolvedValue({
         CommonPrefixes: [{ Prefix: 'people/' }, { Prefix: 'topics/' }],
         Contents: [{ Key: 'README.md' }],
       });
@@ -106,7 +106,7 @@ describe('StorageService', () => {
     });
 
     it('normalizes prefix without trailing slash', async () => {
-      (s3.send as jest.Mock).mockResolvedValue({
+      s3.send.mockResolvedValue({
         CommonPrefixes: [],
         Contents: [{ Key: 'people/alice.md' }],
       });
@@ -121,7 +121,7 @@ describe('StorageService', () => {
     });
 
     it('excludes the prefix key itself from file results', async () => {
-      (s3.send as jest.Mock).mockResolvedValue({
+      s3.send.mockResolvedValue({
         CommonPrefixes: [],
         Contents: [{ Key: 'people/' }, { Key: 'people/alice.md' }],
       });
@@ -134,7 +134,7 @@ describe('StorageService', () => {
     });
 
     it('returns empty array when bucket is empty', async () => {
-      (s3.send as jest.Mock).mockResolvedValue({
+      s3.send.mockResolvedValue({
         CommonPrefixes: undefined,
         Contents: undefined,
       });
@@ -147,11 +147,8 @@ describe('StorageService', () => {
 
   describe('listAllFiles', () => {
     it('returns all file keys under a prefix', async () => {
-      (s3.send as jest.Mock).mockResolvedValue({
-        Contents: [
-          { Key: 'topics/backend.md' },
-          { Key: 'topics/frontend.md' },
-        ],
+      s3.send.mockResolvedValue({
+        Contents: [{ Key: 'topics/backend.md' }, { Key: 'topics/frontend.md' }],
         IsTruncated: false,
       });
 
@@ -161,7 +158,7 @@ describe('StorageService', () => {
     });
 
     it('paginates when the response is truncated', async () => {
-      (s3.send as jest.Mock)
+      s3.send
         .mockResolvedValueOnce({
           Contents: [{ Key: 'people/alice.md' }],
           IsTruncated: true,
@@ -179,7 +176,7 @@ describe('StorageService', () => {
     });
 
     it('returns empty array when no objects exist under the prefix', async () => {
-      (s3.send as jest.Mock).mockResolvedValue({
+      s3.send.mockResolvedValue({
         Contents: undefined,
         IsTruncated: false,
       });

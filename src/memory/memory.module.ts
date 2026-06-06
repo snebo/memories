@@ -12,10 +12,7 @@ import { MemoryWriterService } from './memory-writer.service';
 import { S3_CLIENT, StorageService } from './storage.service';
 
 @Module({
-  imports: [
-    ConfigModule,
-    BullModule.registerQueue({ name: TRANSCRIPT_QUEUE }),
-  ],
+  imports: [ConfigModule, BullModule.registerQueue({ name: TRANSCRIPT_QUEUE })],
   controllers: [MemoryBrowserController],
   providers: [
     {

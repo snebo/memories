@@ -51,7 +51,7 @@ describe('TranscriptsController (integration)', () => {
   describe('POST /transcripts', () => {
     it('returns 201 with id and status when content is valid', async () => {
       const transcript = makeTranscript();
-      (service.create as jest.Mock).mockResolvedValue(transcript);
+      service.create.mockResolvedValue(transcript);
 
       const { body } = await request(app.getHttpServer())
         .post('/transcripts')
@@ -84,7 +84,7 @@ describe('TranscriptsController (integration)', () => {
     });
 
     it('returns 400 when unknown fields are sent', async () => {
-      (service.create as jest.Mock).mockResolvedValue(makeTranscript());
+      service.create.mockResolvedValue(makeTranscript());
       await request(app.getHttpServer())
         .post('/transcripts')
         .send({ content: 'valid', unknownField: 'x' })
@@ -95,7 +95,7 @@ describe('TranscriptsController (integration)', () => {
   describe('GET /transcripts/:id', () => {
     it('returns 200 with the full transcript when found', async () => {
       const transcript = makeTranscript();
-      (service.findOne as jest.Mock).mockResolvedValue(transcript);
+      service.findOne.mockResolvedValue(transcript);
 
       const { body } = await request(app.getHttpServer())
         .get('/transcripts/uuid-1')
@@ -107,7 +107,7 @@ describe('TranscriptsController (integration)', () => {
     });
 
     it('returns 404 when transcript does not exist', async () => {
-      (service.findOne as jest.Mock).mockRejectedValue(
+      service.findOne.mockRejectedValue(
         new NotFoundException('Transcript uuid-x not found'),
       );
 

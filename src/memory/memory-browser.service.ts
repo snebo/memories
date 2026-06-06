@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { StorageEntry, StorageService } from './storage.service';
 
 export interface ListMemoriesResponse {
@@ -58,7 +62,10 @@ export class MemoryBrowserService {
     return { pattern, path: path ?? '', matches };
   }
 
-  private async matchFile(key: string, regex: RegExp): Promise<GrepMatch | null> {
+  private async matchFile(
+    key: string,
+    regex: RegExp,
+  ): Promise<GrepMatch | null> {
     const content = await this.storage.readFile(key);
     if (content === null) return null;
 

@@ -187,7 +187,11 @@ describe('MemoryBrowserController (integration)', () => {
     });
 
     it('returns 200 with empty matches when nothing matches', async () => {
-      service.grep.mockResolvedValue({ pattern: 'xyzzy', path: '', matches: [] });
+      service.grep.mockResolvedValue({
+        pattern: 'xyzzy',
+        path: '',
+        matches: [],
+      });
 
       const { body } = await request(app.getHttpServer())
         .get('/memories/grep')

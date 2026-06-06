@@ -1,29 +1,48 @@
+/**
+ * Smoke test — verifies the application bootstraps successfully.
+ * The meaningful E2E flow is in transcript-to-memory.e2e-spec.ts.
+ */
+
+import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
+import { AppModule } from '../src/app.module';
+import { OPENAI_CLIENT } from '../src/memory/llm.service';
 
-describe('AppController (e2e)', () => {
-  let app: INestApplication<App>;
+const mockOpenAiClient = {
+  chat: { completions: { create: jest.fn() } },
+};
 
-  beforeEach(async () => {
+describe('Application bootstrap (E2E smoke)', () => {
+  let app: INestApplication;
+
+  beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(OPENAI_CLIENT)
+      .useValue(mockOpenAiClient)
+      .compile();
 
     app = moduleFixture.createNestApplication();
+    app.useGlobalPipes(
+      new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }),
+    );
     await app.init();
   });
 
-  it('/ (GET)', () => {
-    return request(app.getHttpServer())
-      .get('/')
-      .expect(200)
-      .expect('Hello World!');
+  afterAll(async () => {
+    await app.close();
   });
 
-  afterEach(async () => {
-    await app.close();
+  it('POST /transcripts returns 400 for missing body (app is healthy)', async () => {
+    await request(app.getHttpServer())
+      .post('/transcripts')
+      .send({})
+      .expect(400);
+  });
+
+  it('GET /memories returns 200 (app is healthy)', async () => {
+    await request(app.getHttpServer()).get('/memories').expect(200);
   });
 });

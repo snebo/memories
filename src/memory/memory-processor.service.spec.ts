@@ -70,11 +70,13 @@ describe('MemoryProcessorService', () => {
       const transcript = makeTranscript();
       const memories = makeMemories();
 
-      (prisma.transcript.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
-      (prisma.transcript.findUnique as jest.Mock).mockResolvedValue(transcript);
-      (llm.extractMemories as jest.Mock).mockResolvedValue(memories);
-      (writer.writeMemories as jest.Mock).mockResolvedValue(undefined);
-      (prisma.transcript.update as jest.Mock).mockResolvedValue({});
+      prisma.transcript.updateMany.mockResolvedValue({
+        count: 1,
+      });
+      prisma.transcript.findUnique.mockResolvedValue(transcript);
+      llm.extractMemories.mockResolvedValue(memories);
+      writer.writeMemories.mockResolvedValue(undefined);
+      prisma.transcript.update.mockResolvedValue({});
 
       await service.process(makeJob());
 
@@ -82,7 +84,9 @@ describe('MemoryProcessorService', () => {
         where: { id: 'uuid-1', status: 'pending' },
         data: { status: 'processing' },
       });
-      expect(prisma.transcript.findUnique).toHaveBeenCalledWith({ where: { id: 'uuid-1' } });
+      expect(prisma.transcript.findUnique).toHaveBeenCalledWith({
+        where: { id: 'uuid-1' },
+      });
       expect(llm.extractMemories).toHaveBeenCalledWith(transcript.content);
       expect(writer.writeMemories).toHaveBeenCalledWith(
         memories,
@@ -97,7 +101,9 @@ describe('MemoryProcessorService', () => {
 
   describe('process (idempotency — Layer 2)', () => {
     it('skips all work when CAS returns count 0 (duplicate or already processed)', async () => {
-      (prisma.transcript.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+      prisma.transcript.updateMany.mockResolvedValue({
+        count: 0,
+      });
 
       await service.process(makeJob());
 
@@ -109,10 +115,12 @@ describe('MemoryProcessorService', () => {
 
   describe('process (failure handling)', () => {
     it('marks transcript as failed and rethrows when LLM throws (allowing BullMQ retry)', async () => {
-      (prisma.transcript.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
-      (prisma.transcript.findUnique as jest.Mock).mockResolvedValue(makeTranscript());
-      (llm.extractMemories as jest.Mock).mockRejectedValue(new Error('rate limit'));
-      (prisma.transcript.update as jest.Mock).mockResolvedValue({});
+      prisma.transcript.updateMany.mockResolvedValue({
+        count: 1,
+      });
+      prisma.transcript.findUnique.mockResolvedValue(makeTranscript());
+      llm.extractMemories.mockRejectedValue(new Error('rate limit'));
+      prisma.transcript.update.mockResolvedValue({});
 
       await expect(service.process(makeJob())).rejects.toThrow('rate limit');
 
@@ -123,13 +131,17 @@ describe('MemoryProcessorService', () => {
     });
 
     it('marks transcript as failed and rethrows when storage write throws', async () => {
-      (prisma.transcript.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
-      (prisma.transcript.findUnique as jest.Mock).mockResolvedValue(makeTranscript());
-      (llm.extractMemories as jest.Mock).mockResolvedValue(makeMemories());
-      (writer.writeMemories as jest.Mock).mockRejectedValue(new Error('S3 unavailable'));
-      (prisma.transcript.update as jest.Mock).mockResolvedValue({});
+      prisma.transcript.updateMany.mockResolvedValue({
+        count: 1,
+      });
+      prisma.transcript.findUnique.mockResolvedValue(makeTranscript());
+      llm.extractMemories.mockResolvedValue(makeMemories());
+      writer.writeMemories.mockRejectedValue(new Error('S3 unavailable'));
+      prisma.transcript.update.mockResolvedValue({});
 
-      await expect(service.process(makeJob())).rejects.toThrow('S3 unavailable');
+      await expect(service.process(makeJob())).rejects.toThrow(
+        'S3 unavailable',
+      );
 
       expect(prisma.transcript.update).toHaveBeenCalledWith({
         where: { id: 'uuid-1' },
@@ -138,9 +150,11 @@ describe('MemoryProcessorService', () => {
     });
 
     it('throws when transcript is not found after claiming', async () => {
-      (prisma.transcript.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
-      (prisma.transcript.findUnique as jest.Mock).mockResolvedValue(null);
-      (prisma.transcript.update as jest.Mock).mockResolvedValue({});
+      prisma.transcript.updateMany.mockResolvedValue({
+        count: 1,
+      });
+      prisma.transcript.findUnique.mockResolvedValue(null);
+      prisma.transcript.update.mockResolvedValue({});
 
       await expect(service.process(makeJob())).rejects.toThrow(/not found/);
     });

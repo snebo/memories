@@ -115,6 +115,181 @@ describe('MemoryWriterService', () => {
     });
   });
 
+  describe('buildTopicContent', () => {
+    const topic = {
+      name: 'Backend Redesign',
+      summary: 'Moving to microservices',
+      keyPoints: ['Use event-driven architecture', 'Auth service first'],
+    };
+
+    it('creates a new markdown file for a new topic', () => {
+      const content = service.buildTopicContent(null, topic, '2026-06-07');
+
+      expect(content).toContain('# Backend Redesign');
+      expect(content).toContain('Moving to microservices');
+      expect(content).toContain('- Use event-driven architecture');
+      expect(content).toContain('- Auth service first');
+      expect(content).toContain('2026-06-07');
+    });
+
+    it('appends a new update block for a new date on an existing topic file', () => {
+      const existing =
+        '# Backend Redesign\n\n## Updates\n\n### 2026-01-01\n**Summary**: Initial plan\n';
+      const content = service.buildTopicContent(existing, topic, '2026-06-07');
+
+      expect(content).toContain('### 2026-01-01');
+      expect(content).toContain('### 2026-06-07');
+      expect(content).toContain('Moving to microservices');
+    });
+
+    it('does not duplicate an update block for the same date', () => {
+      const existing =
+        '# Backend Redesign\n\n## Updates\n\n### 2026-06-07\n**Summary**: Existing entry\n';
+      const content = service.buildTopicContent(existing, topic, '2026-06-07');
+
+      expect(content.match(/### 2026-06-07/g)).toHaveLength(1);
+    });
+  });
+
+  describe('buildEntityContent', () => {
+    const company = { name: 'Acme Corp', context: 'Primary employer of Alice' };
+    const location = { name: 'Berlin', context: 'Office headquarters' };
+
+    it('creates a new markdown file for a new company', () => {
+      const content = service.buildEntityContent(null, company, '2026-06-07');
+
+      expect(content).toContain('# Acme Corp');
+      expect(content).toContain('Primary employer of Alice');
+      expect(content).toContain('2026-06-07');
+    });
+
+    it('creates a new markdown file for a new location', () => {
+      const content = service.buildEntityContent(null, location, '2026-06-07');
+
+      expect(content).toContain('# Berlin');
+      expect(content).toContain('Office headquarters');
+    });
+
+    it('appends to an existing company file without overwriting earlier entries', () => {
+      const existing =
+        '# Acme Corp\n\n## Updates\n\n### 2026-01-01\n- First mention\n';
+      const content = service.buildEntityContent(
+        existing,
+        company,
+        '2026-06-07',
+      );
+
+      expect(content).toContain('### 2026-01-01');
+      expect(content).toContain('### 2026-06-07');
+      expect(content).toContain('Primary employer of Alice');
+    });
+
+    it('does not duplicate a company update for the same date', () => {
+      const existing =
+        '# Acme Corp\n\n## Updates\n\n### 2026-06-07\n- Already here\n';
+      const content = service.buildEntityContent(
+        existing,
+        company,
+        '2026-06-07',
+      );
+
+      expect(content.match(/### 2026-06-07/g)).toHaveLength(1);
+    });
+  });
+
+  describe('file path generation (writeMemories key structure)', () => {
+    beforeEach(() => {
+      storage.readFile.mockResolvedValue(null);
+      storage.writeFile.mockResolvedValue(undefined);
+    });
+
+    it('writes people files under people/<slug>.md', async () => {
+      await service.writeMemories(makeMemories(), '2026-06-07');
+
+      expect(storage.writeFile).toHaveBeenCalledWith(
+        'people/alice-johnson.md',
+        expect.any(String),
+      );
+    });
+
+    it('writes company files under entities/companies/<slug>.md', async () => {
+      await service.writeMemories(makeMemories(), '2026-06-07');
+
+      expect(storage.writeFile).toHaveBeenCalledWith(
+        'entities/companies/acme-corp.md',
+        expect.any(String),
+      );
+    });
+
+    it('writes location files under entities/locations/<slug>.md', async () => {
+      await service.writeMemories(makeMemories(), '2026-06-07');
+
+      expect(storage.writeFile).toHaveBeenCalledWith(
+        'entities/locations/berlin.md',
+        expect.any(String),
+      );
+    });
+
+    it('writes topic files under topics/<slug>.md', async () => {
+      await service.writeMemories(makeMemories(), '2026-06-07');
+
+      expect(storage.writeFile).toHaveBeenCalledWith(
+        'topics/backend-redesign.md',
+        expect.any(String),
+      );
+    });
+
+    it('writes ISO date timeline entries under timeline/<year-month>/summary.md', async () => {
+      const memories = makeMemories({
+        timeline: [{ date: '2026-06-15', event: 'Kick-off', participants: [] }],
+      });
+      await service.writeMemories(memories, '2026-06-07');
+
+      expect(storage.writeFile).toHaveBeenCalledWith(
+        'timeline/2026-06/summary.md',
+        expect.any(String),
+      );
+    });
+
+    it('writes quarter-format timeline entries under timeline/<year-Qn>/summary.md', async () => {
+      const memories = makeMemories({
+        timeline: [
+          { date: '2026-Q3', event: 'Migration start', participants: [] },
+        ],
+      });
+      await service.writeMemories(memories, '2026-06-07');
+
+      expect(storage.writeFile).toHaveBeenCalledWith(
+        'timeline/2026-Q3/summary.md',
+        expect.any(String),
+      );
+    });
+
+    it('slugifies multi-word entity names with spaces', async () => {
+      const memories = makeMemories({
+        entities: {
+          people: [
+            {
+              name: 'John van der Berg',
+              role: 'CTO',
+              context: 'Led architecture',
+            },
+          ],
+          companies: [],
+          locations: [],
+        },
+        topics: [],
+        timeline: [],
+      });
+      await service.writeMemories(memories, '2026-06-07');
+
+      expect(storage.writeFile).toHaveBeenCalledWith(
+        'people/john-van-der-berg.md',
+        expect.any(String),
+      );
+    });
+  });
+
   describe('buildTimelineContent', () => {
     it('creates timeline file with the event', () => {
       const entry = {
@@ -146,8 +321,8 @@ describe('MemoryWriterService', () => {
 
   describe('writeMemories', () => {
     it('writes one file per entity type, topic, and timeline entry', async () => {
-      (storage.readFile as jest.Mock).mockResolvedValue(null);
-      (storage.writeFile as jest.Mock).mockResolvedValue(undefined);
+      storage.readFile.mockResolvedValue(null);
+      storage.writeFile.mockResolvedValue(undefined);
 
       const memories = makeMemories();
       await service.writeMemories(memories, '2026-06-06');
@@ -169,8 +344,8 @@ describe('MemoryWriterService', () => {
     });
 
     it('reads existing files before writing (merge, not overwrite)', async () => {
-      (storage.readFile as jest.Mock).mockResolvedValue('# Existing content\n');
-      (storage.writeFile as jest.Mock).mockResolvedValue(undefined);
+      storage.readFile.mockResolvedValue('# Existing content\n');
+      storage.writeFile.mockResolvedValue(undefined);
 
       await service.writeMemories(makeMemories(), '2026-06-06');
 

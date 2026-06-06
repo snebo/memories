@@ -2,7 +2,7 @@
   "moduleFileExtensions": ["js", "json", "ts"],
   "rootDir": "..",
   "testEnvironment": "node",
-  "testRegex": "test/.+\\.e2e-spec\\.ts$",
+  "testRegex": "test/integration/.+\\.integration-spec\\.ts$",
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
   },
@@ -11,5 +11,5 @@
     "^@prisma/generated/(.+)$": "<rootDir>/src/generated/prisma/$1",
     "^(\\.{1,2}\\/.+)\\.js$": "$1"
   },
-  "testTimeout": 60000
+  "testTimeout": 30000
 }

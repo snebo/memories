@@ -116,6 +116,39 @@ describe('LlmService', () => {
       );
     });
 
+    it('throws on a completely empty string', () => {
+      expect(() => service.parseExtractedMemories('')).toThrow(
+        /Failed to parse LLM response/,
+      );
+    });
+
+    it('ignores unrecognised extra fields returned by the LLM', () => {
+      const withExtras = JSON.stringify({
+        ...validExtractedMemories,
+        unknownField: 'should be ignored',
+        nested: { also: 'ignored' },
+      });
+
+      expect(() => service.parseExtractedMemories(withExtras)).not.toThrow();
+      const result = service.parseExtractedMemories(withExtras);
+      expect(result.entities.people).toHaveLength(1);
+    });
+
+    it('defaults missing entities object to all-empty arrays', () => {
+      const noEntities = JSON.stringify({
+        topics: [],
+        facts: [],
+        sentiment: { overall: 'neutral', score: 0, notes: '' },
+        timeline: [],
+      });
+
+      const result = service.parseExtractedMemories(noEntities);
+
+      expect(result.entities.people).toEqual([]);
+      expect(result.entities.companies).toEqual([]);
+      expect(result.entities.locations).toEqual([]);
+    });
+
     it('handles an empty transcript (no entities extracted)', () => {
       const empty = JSON.stringify({
         entities: { people: [], companies: [], locations: [] },
@@ -134,7 +167,7 @@ describe('LlmService', () => {
 
   describe('extractMemories', () => {
     it('calls OpenAI with the transcript content and returns parsed memories', async () => {
-      (openai.chat.completions.create as jest.Mock).mockResolvedValue({
+      openai.chat.completions.create.mockResolvedValue({
         choices: [
           {
             message: {
@@ -167,7 +200,7 @@ describe('LlmService', () => {
     });
 
     it('throws when OpenAI returns an empty response', async () => {
-      (openai.chat.completions.create as jest.Mock).mockResolvedValue({
+      openai.chat.completions.create.mockResolvedValue({
         choices: [{ message: { content: null } }],
       });
 
@@ -177,7 +210,7 @@ describe('LlmService', () => {
     });
 
     it('propagates OpenAI API errors with context', async () => {
-      (openai.chat.completions.create as jest.Mock).mockRejectedValue(
+      openai.chat.completions.create.mockRejectedValue(
         new Error('rate limit exceeded'),
       );
 

@@ -40,7 +40,9 @@ describe('MemoryBrowserService', () => {
     });
 
     it('returns entries for a specific path prefix', async () => {
-      const entries: StorageEntry[] = [{ key: 'people/alice.md', type: 'file' }];
+      const entries: StorageEntry[] = [
+        { key: 'people/alice.md', type: 'file' },
+      ];
       storage.listFiles.mockResolvedValue(entries);
 
       const result = await service.list('people/');
@@ -92,8 +94,10 @@ describe('MemoryBrowserService', () => {
     const fileA = 'people/alice.md';
     const fileB = 'topics/backend.md';
     // No blank line between header and body so context window includes '# Alice'
-    const contentA = '# Alice\nWorks on the backend team.\nShe likes TypeScript.';
-    const contentB = '# Backend\n\nAll things backend engineering.\nIncludes Node.js.';
+    const contentA =
+      '# Alice\nWorks on the backend team.\nShe likes TypeScript.';
+    const contentB =
+      '# Backend\n\nAll things backend engineering.\nIncludes Node.js.';
 
     beforeEach(() => {
       storage.listAllFiles.mockResolvedValue([fileA, fileB]);
@@ -110,9 +114,9 @@ describe('MemoryBrowserService', () => {
       expect(result.pattern).toBe('typescript');
       expect(result.matches).toHaveLength(1);
       expect(result.matches[0].file).toBe(fileA);
-      expect(result.matches[0].excerpts.some((e) => /typescript/i.test(e))).toBe(
-        true,
-      );
+      expect(
+        result.matches[0].excerpts.some((e) => /typescript/i.test(e)),
+      ).toBe(true);
     });
 
     it('returns matches from multiple files when pattern appears in both', async () => {
