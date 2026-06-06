@@ -5,6 +5,8 @@ import { S3Client } from '@aws-sdk/client-s3';
 import OpenAI from 'openai';
 import { TRANSCRIPT_QUEUE } from '../transcripts/queues/transcript.queue';
 import { LlmService, OPENAI_CLIENT } from './llm.service';
+import { MemoryBrowserController } from './memory-browser.controller';
+import { MemoryBrowserService } from './memory-browser.service';
 import { MemoryProcessorService } from './memory-processor.service';
 import { MemoryWriterService } from './memory-writer.service';
 import { S3_CLIENT, StorageService } from './storage.service';
@@ -14,6 +16,7 @@ import { S3_CLIENT, StorageService } from './storage.service';
     ConfigModule,
     BullModule.registerQueue({ name: TRANSCRIPT_QUEUE }),
   ],
+  controllers: [MemoryBrowserController],
   providers: [
     {
       provide: S3_CLIENT,
@@ -39,6 +42,7 @@ import { S3_CLIENT, StorageService } from './storage.service';
     LlmService,
     MemoryWriterService,
     MemoryProcessorService,
+    MemoryBrowserService,
   ],
 })
 export class MemoryModule {}

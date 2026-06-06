@@ -91,7 +91,8 @@ describe('MemoryBrowserService', () => {
   describe('grep', () => {
     const fileA = 'people/alice.md';
     const fileB = 'topics/backend.md';
-    const contentA = '# Alice\n\nWorks on the backend team.\nShe likes TypeScript.';
+    // No blank line between header and body so context window includes '# Alice'
+    const contentA = '# Alice\nWorks on the backend team.\nShe likes TypeScript.';
     const contentB = '# Backend\n\nAll things backend engineering.\nIncludes Node.js.';
 
     beforeEach(() => {
