@@ -9,6 +9,7 @@ datasource db {
 }
 
 enum TranscriptStatus {
+  pending
   processing
   completed
   failed
@@ -17,7 +18,7 @@ enum TranscriptStatus {
 model Transcript {
   id          String           @id @default(uuid())
   content     String
-  contentHash String
-  status      TranscriptStatus @default(processing)
+  contentHash String           @unique
+  status      TranscriptStatus @default(pending)
   createdAt   DateTime         @default(now())
 }

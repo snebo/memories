@@ -18,7 +18,7 @@ const makeTranscript = (overrides: Partial<Transcript> = {}): Transcript => ({
   id: 'uuid-1',
   content: 'hello world',
   contentHash: 'abc123',
-  status: 'processing',
+  status: 'pending',
   createdAt: new Date('2026-01-01'),
   ...overrides,
 });

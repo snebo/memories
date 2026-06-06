@@ -19,9 +19,13 @@ export class TranscriptsService {
     @InjectQueue(TRANSCRIPT_QUEUE)
     private readonly queue: Queue<TranscriptJobPayload>,
   ) {}
-  // helper function to hash transcript to help with idempotency
+
   computeContentHash(content: string): string {
     return createHash('sha256').update(content).digest('hex');
+  }
+
+  async findByContentHash(contentHash: string): Promise<Transcript | null> {
+    return this.prisma.transcript.findUnique({ where: { contentHash } });
   }
 
   async persistTranscript(
@@ -34,11 +38,27 @@ export class TranscriptsService {
   }
 
   async enqueueTranscriptJob(transcriptId: string): Promise<void> {
-    await this.queue.add('process', { transcriptId });
+    await this.queue.add(
+      'process',
+      { transcriptId },
+      {
+        jobId: transcriptId,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 },
+        removeOnComplete: true,
+        removeOnFail: false,
+      },
+    );
   }
 
   async create(dto: CreateTranscriptDto): Promise<Transcript> {
     const contentHash = this.computeContentHash(dto.content);
+
+    const existing = await this.findByContentHash(contentHash);
+    if (existing) {
+      return existing;
+    }
+
     const transcript = await this.persistTranscript(dto, contentHash);
     this.enqueueTranscriptJob(transcript.id).catch((err: unknown) =>
       this.logger.error('Failed to enqueue transcript job', err),
