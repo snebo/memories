@@ -13,12 +13,10 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
-import { OPENAI_CLIENT } from '../../src/memory/llm.service';
+import { LLM_CLIENT } from '../../src/memory/llm-client.interface';
 import { PrismaService } from '../../src/prisma/prisma.service';
 
-const mockOpenAiClient = {
-  chat: { completions: { create: jest.fn() } },
-};
+const mockLlmClient = { complete: jest.fn() };
 
 describe('Transcript Ingest Flow (Integration)', () => {
   let app: INestApplication;
@@ -28,8 +26,8 @@ describe('Transcript Ingest Flow (Integration)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
-      .overrideProvider(OPENAI_CLIENT)
-      .useValue(mockOpenAiClient)
+      .overrideProvider(LLM_CLIENT)
+      .useValue(mockLlmClient)
       .compile();
 
     app = moduleFixture.createNestApplication();

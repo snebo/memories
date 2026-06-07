@@ -30,6 +30,11 @@ export class MemoryProcessorService extends WorkerHost {
     try {
       await this.processTranscript(transcriptId);
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `Transcript ${transcriptId} failed — ${message}`,
+        err instanceof Error ? err.stack : undefined,
+      );
       await this.markFailed(transcriptId);
       throw err;
     }
@@ -37,7 +42,7 @@ export class MemoryProcessorService extends WorkerHost {
 
   private async claimTranscript(transcriptId: string): Promise<boolean> {
     const result = await this.prisma.transcript.updateMany({
-      where: { id: transcriptId, status: 'pending' },
+      where: { id: transcriptId, status: { in: ['pending', 'failed'] } },
       data: { status: 'processing' },
     });
     return result.count > 0;

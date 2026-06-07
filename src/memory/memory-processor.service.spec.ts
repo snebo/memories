@@ -81,7 +81,7 @@ describe('MemoryProcessorService', () => {
       await service.process(makeJob());
 
       expect(prisma.transcript.updateMany).toHaveBeenCalledWith({
-        where: { id: 'uuid-1', status: 'pending' },
+        where: { id: 'uuid-1', status: { in: ['pending', 'failed'] } },
         data: { status: 'processing' },
       });
       expect(prisma.transcript.findUnique).toHaveBeenCalledWith({
@@ -100,16 +100,59 @@ describe('MemoryProcessorService', () => {
   });
 
   describe('process (idempotency — Layer 2)', () => {
-    it('skips all work when CAS returns count 0 (duplicate or already processed)', async () => {
-      prisma.transcript.updateMany.mockResolvedValue({
-        count: 0,
-      });
+    it('skips all work when CAS returns count 0 (already processing or completed)', async () => {
+      prisma.transcript.updateMany.mockResolvedValue({ count: 0 });
 
       await service.process(makeJob());
 
       expect(prisma.transcript.findUnique).not.toHaveBeenCalled();
       expect(llm.extractMemories).not.toHaveBeenCalled();
       expect(writer.writeMemories).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('process (BullMQ retry after failure)', () => {
+    it('re-claims a failed transcript on a BullMQ retry attempt', async () => {
+      // Simulate: first attempt failed → status is now 'failed' → BullMQ retries
+      // The CAS must accept status 'failed' so the retry can proceed.
+      const transcript = makeTranscript({ status: 'failed' });
+      const memories = makeMemories();
+
+      prisma.transcript.updateMany.mockResolvedValue({ count: 1 });
+      prisma.transcript.findUnique.mockResolvedValue(transcript);
+      llm.extractMemories.mockResolvedValue(memories);
+      writer.writeMemories.mockResolvedValue(undefined);
+      prisma.transcript.update.mockResolvedValue({});
+
+      await service.process(makeJob());
+
+      expect(prisma.transcript.updateMany).toHaveBeenCalledWith({
+        where: { id: 'uuid-1', status: { in: ['pending', 'failed'] } },
+        data: { status: 'processing' },
+      });
+      expect(llm.extractMemories).toHaveBeenCalled();
+      expect(prisma.transcript.update).toHaveBeenCalledWith({
+        where: { id: 'uuid-1' },
+        data: { status: 'completed' },
+      });
+    });
+
+    it('does not re-claim a transcript that is currently processing (concurrent guard)', async () => {
+      // status: 'processing' → CAS returns 0 → skip (another worker has it)
+      prisma.transcript.updateMany.mockResolvedValue({ count: 0 });
+
+      await service.process(makeJob());
+
+      expect(llm.extractMemories).not.toHaveBeenCalled();
+    });
+
+    it('does not re-claim a completed transcript', async () => {
+      // status: 'completed' → CAS returns 0 → skip
+      prisma.transcript.updateMany.mockResolvedValue({ count: 0 });
+
+      await service.process(makeJob());
+
+      expect(llm.extractMemories).not.toHaveBeenCalled();
     });
   });
 

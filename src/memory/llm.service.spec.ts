@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConfigService } from '@nestjs/config';
-import { LlmService, OPENAI_CLIENT } from './llm.service';
+import { LlmService } from './llm.service';
+import { LLM_CLIENT } from './llm-client.interface';
 import { ExtractedMemories } from './types/extracted-memories.types';
 
 const validExtractedMemories: ExtractedMemories = {
@@ -35,32 +35,22 @@ const validExtractedMemories: ExtractedMemories = {
   ],
 };
 
-const mockOpenAiClient = () => ({
-  chat: {
-    completions: {
-      create: jest.fn(),
-    },
-  },
-});
+const mockLlmClient = () => ({ complete: jest.fn() });
 
 describe('LlmService', () => {
   let service: LlmService;
-  let openai: ReturnType<typeof mockOpenAiClient>;
+  let client: ReturnType<typeof mockLlmClient>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         LlmService,
-        { provide: OPENAI_CLIENT, useFactory: mockOpenAiClient },
-        {
-          provide: ConfigService,
-          useValue: { get: jest.fn().mockReturnValue('gpt-4o') },
-        },
+        { provide: LLM_CLIENT, useFactory: mockLlmClient },
       ],
     }).compile();
 
     service = module.get(LlmService);
-    openai = module.get(OPENAI_CLIENT);
+    client = module.get(LLM_CLIENT);
   });
 
   describe('parseExtractedMemories', () => {
@@ -166,56 +156,40 @@ describe('LlmService', () => {
   });
 
   describe('extractMemories', () => {
-    it('calls OpenAI with the transcript content and returns parsed memories', async () => {
-      openai.chat.completions.create.mockResolvedValue({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify(validExtractedMemories),
-            },
-          },
-        ],
-      });
+    it('delegates to the client and returns parsed memories', async () => {
+      client.complete.mockResolvedValue(JSON.stringify(validExtractedMemories));
 
       const result = await service.extractMemories(
         'Alice discussed the backend redesign.',
       );
 
-      expect(openai.chat.completions.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          model: expect.any(String),
-          messages: expect.arrayContaining([
-            expect.objectContaining({ role: 'system' }),
-            expect.objectContaining({
-              role: 'user',
-              content: expect.stringContaining(
-                'Alice discussed the backend redesign.',
-              ),
-            }),
-          ]),
-          response_format: expect.objectContaining({ type: 'json_schema' }),
-        }),
+      expect(client.complete).toHaveBeenCalledWith(
+        'Alice discussed the backend redesign.',
       );
       expect(result.entities.people[0].name).toBe('Alice');
     });
 
-    it('throws when OpenAI returns an empty response', async () => {
-      openai.chat.completions.create.mockResolvedValue({
-        choices: [{ message: { content: null } }],
-      });
+    it('wraps an "Empty response" error from the client', async () => {
+      client.complete.mockRejectedValue(new Error('Empty response from LLM'));
 
       await expect(service.extractMemories('test transcript')).rejects.toThrow(
-        /Empty response from LLM/,
+        /LLM extraction failed: Empty response from LLM/,
       );
     });
 
-    it('propagates OpenAI API errors with context', async () => {
-      openai.chat.completions.create.mockRejectedValue(
-        new Error('rate limit exceeded'),
-      );
+    it('wraps API errors from the client with context', async () => {
+      client.complete.mockRejectedValue(new Error('429 rate limit exceeded'));
 
       await expect(service.extractMemories('test')).rejects.toThrow(
         /LLM extraction failed/,
+      );
+    });
+
+    it('rethrows parse errors without double-wrapping', async () => {
+      client.complete.mockResolvedValue('{ not valid json');
+
+      await expect(service.extractMemories('test')).rejects.toThrow(
+        /Failed to parse LLM response/,
       );
     });
   });

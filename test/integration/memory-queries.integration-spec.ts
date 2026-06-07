@@ -18,15 +18,13 @@ import {
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
-import { OPENAI_CLIENT } from '../../src/memory/llm.service';
+import { LLM_CLIENT } from '../../src/memory/llm-client.interface';
 import { S3_CLIENT, StorageService } from '../../src/memory/storage.service';
 
 // Use a dedicated bucket so these tests never touch the dev bucket.
 process.env['MINIO_BUCKET'] = 'memories-integration-test';
 
-const mockOpenAiClient = {
-  chat: { completions: { create: jest.fn() } },
-};
+const mockLlmClient = { complete: jest.fn() };
 
 async function emptyBucket(s3: S3Client, bucket: string): Promise<void> {
   const list = await s3.send(new ListObjectsV2Command({ Bucket: bucket }));
@@ -49,8 +47,8 @@ describe('Memory Browser Endpoints (Integration)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
-      .overrideProvider(OPENAI_CLIENT)
-      .useValue(mockOpenAiClient)
+      .overrideProvider(LLM_CLIENT)
+      .useValue(mockLlmClient)
       .compile();
 
     app = moduleFixture.createNestApplication();

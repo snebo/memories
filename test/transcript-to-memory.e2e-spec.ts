@@ -18,7 +18,7 @@ import {
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
-import { OPENAI_CLIENT } from '../src/memory/llm.service';
+import { LLM_CLIENT } from '../src/memory/llm-client.interface';
 import { S3_CLIENT } from '../src/memory/storage.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 
@@ -68,14 +68,8 @@ const EXTRACTED_MEMORIES = {
   ],
 };
 
-const mockOpenAiClient = {
-  chat: {
-    completions: {
-      create: jest.fn().mockResolvedValue({
-        choices: [{ message: { content: JSON.stringify(EXTRACTED_MEMORIES) } }],
-      }),
-    },
-  },
+const mockLlmClient = {
+  complete: jest.fn().mockResolvedValue(JSON.stringify(EXTRACTED_MEMORIES)),
 };
 
 async function poll<T>(
@@ -113,8 +107,8 @@ describe('POST /transcripts → poll → GET /memories/grep (E2E)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
-      .overrideProvider(OPENAI_CLIENT)
-      .useValue(mockOpenAiClient)
+      .overrideProvider(LLM_CLIENT)
+      .useValue(mockLlmClient)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -136,7 +130,7 @@ describe('POST /transcripts → poll → GET /memories/grep (E2E)', () => {
   beforeEach(async () => {
     await prisma.transcript.deleteMany();
     await emptyBucket(s3, 'memories-e2e-test');
-    mockOpenAiClient.chat.completions.create.mockClear();
+    mockLlmClient.complete.mockClear();
   });
 
   it('processes a transcript end-to-end and writes queryable memory files', async () => {
@@ -167,7 +161,7 @@ describe('POST /transcripts → poll → GET /memories/grep (E2E)', () => {
     expect(final.status).toBe('completed');
 
     // Step 3: verify the LLM was called once
-    expect(mockOpenAiClient.chat.completions.create).toHaveBeenCalledTimes(1);
+    expect(mockLlmClient.complete).toHaveBeenCalledTimes(1);
 
     // Step 4: grep for Alice Johnson's memory file
     const { body: aliceGrep } = await request(app.getHttpServer())
@@ -226,6 +220,6 @@ describe('POST /transcripts → poll → GET /memories/grep (E2E)', () => {
     );
 
     // OpenAI should only have been called once (the second POST returns existing record)
-    expect(mockOpenAiClient.chat.completions.create).toHaveBeenCalledTimes(1);
+    expect(mockLlmClient.complete).toHaveBeenCalledTimes(1);
   });
 });
