@@ -1,197 +1,230 @@
 # Memories
 
-A production-grade NestJS service that ingests conversation transcripts, extracts structured knowledge from them via an LLM, and stores the result as searchable markdown files in object storage.
+A NestJS service that ingests conversation transcripts, extracts structured knowledge from them via an LLM, and stores the result as searchable Markdown files in object storage.
 
 ---
 
 ## Quick start
 
 ```bash
-cp .env.example .env           # add your OPENAI_API_KEY
-bash scripts/setup.sh          # starts Docker services + runs migrations
+cp .env.example .env   # fill in your API key(s)
+docker compose up -d --build
 ```
 
-The API is available at **http://localhost:3000** and the Swagger UI at **http://localhost:3000/api**.
+API: **http://localhost:3000** · Swagger UI: **http://localhost:3000/api**
+
+---
+
+## Core packages
+
+| Package | Role |
+|---|---|
+| `@nestjs/*` | Framework — modules, DI, decorators, BullMQ integration |
+| `prisma` / `@prisma/adapter-pg` | ORM with native PostgreSQL driver |
+| `bullmq` / `@nestjs/bullmq` | Redis-backed job queue with dedup and retry |
+| `@aws-sdk/client-s3` | S3-compatible storage (MinIO in dev, real S3 in prod) |
+| `openai` | OpenAI GPT-4o adapter |
+| `@google/generative-ai` | Google Gemini adapter |
+| `class-validator` / `class-transformer` | DTO validation |
+| `@nestjs/swagger` | Auto-generated API docs from decorators |
+| `jest` / `supertest` | Unit, integration, and E2E testing |
 
 ---
 
 ## Architecture
 
-### Overview
+### Thought process
+
+The goal was a system that could ingest arbitrary transcripts and build a growing, queryable knowledge base from them — without the caller waiting on LLM latency. NestJS was the natural fit: its module system, DI container, and decorator-first design map cleanly onto the problem (ingest module, processing module, storage module). PostgreSQL tracks transcript state and deduplication metadata. Redis + BullMQ handles the async job queue with built-in retries and deduplication. MinIO runs locally to simulate S3 without a cloud account.
+
+### Request flow
 
 ```
 POST /transcripts
       │
       ▼
-TranscriptsService          ← SHA-256 dedup, persists to PostgreSQL
+TranscriptsService          — SHA-256 dedup, persist to PostgreSQL, enqueue job
       │
       ▼
-BullMQ (transcript queue)   ← Redis-backed, jobId = transcriptId (dedup at queue level)
+BullMQ (transcript queue)   — Redis-backed; jobId = transcriptId prevents duplicate queue entries
       │
       ▼
-MemoryProcessorService      ← BullMQ WorkerHost, CAS pending→processing
+MemoryProcessorService      — BullMQ consumer; CAS pending→processing before any real work
       │
       ▼
-LlmService                  ← OpenAI GPT-4o, json_schema response_format
+LlmService                  — delegates to the configured LLM adapter (OpenAI or Gemini)
       │
       ▼
-MemoryWriterService         ← builds / merges per-entity markdown files
+MemoryWriterService         — builds / merges per-entity Markdown files
       │
       ▼
-StorageService              ← AWS S3 SDK → MinIO
+StorageService              — AWS S3 SDK → MinIO (or real S3)
       │
       ▼
-GET /memories, /memories/cat, /memories/grep
+GET /memories  /memories/cat  /memories/grep
 ```
 
 ### Module structure
 
-| Module              | Responsibility                                                |
-| ------------------- | ------------------------------------------------------------- |
-| `TranscriptsModule` | HTTP ingest, dedup, DB persistence, queue enqueue             |
-| `MemoryModule`      | BullMQ worker, LLM extraction, storage writes, read endpoints |
-| `PrismaModule`      | Global database client (PrismaPg adapter)                     |
+| Module | Responsibility |
+|---|---|
+| `TranscriptsModule` | HTTP ingest, SHA-256 dedup, DB persistence, queue enqueue |
+| `MemoryModule` | BullMQ worker, LLM extraction, storage writes, read endpoints |
+| `PrismaModule` | Global database client |
 
-### Memory file hierarchy
+---
+
+## Memory file structure
 
 ```
 memories/
-  people/               ← one file per person (slug of name)
-  topics/               ← one file per topic discussed
+  people/           ← one file per person (name-slug.md)
+  topics/           ← one file per topic discussed
   entities/
-    companies/          ← one file per company
-    locations/          ← one file per location
+    companies/
+    locations/
   timeline/
-    2026-Q3/            ← quarter or month-period directory
+    2026-Q3/
       summary.md
 ```
 
-Each file is append-only: new information is added in a dated `### YYYY-MM-DD` block so the full history is preserved without overwriting earlier extractions.
+Each file is append-only. New extractions are written as dated `### YYYY-MM-DD` blocks so the full history accumulates without overwriting earlier entries. A duplicate-date guard means retrying a failed job never double-writes the same block.
+
+**Why Markdown?** Plain text is hard to read and hard to grep meaningfully. Well-structured Markdown lets `GET /memories/grep` return excerpts that are immediately human-readable — the heading, date, and bullet context all survive in the excerpt window.
 
 ---
 
 ## API endpoints
 
-| Method | Path               | Description                         |
-| ------ | ------------------ | ----------------------------------- |
-| `POST` | `/transcripts`     | Ingest a transcript                 |
-| `GET`  | `/transcripts/:id` | Poll processing status              |
-| `GET`  | `/memories`        | List files/directories (`ls`)       |
-| `GET`  | `/memories/cat`    | Read a file (`cat`)                 |
-| `GET`  | `/memories/grep`   | Regex search with excerpts (`grep`) |
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/transcripts` | Ingest a transcript |
+| `GET` | `/transcripts/:id` | Poll processing status |
+| `GET` | `/memories` | List files / directories (`ls`) |
+| `GET` | `/memories/cat` | Return file contents (`cat`) |
+| `GET` | `/memories/grep` | Regex search with line excerpts (`grep`) |
 
-Full documentation with request/response examples is available at **`/api`** (Swagger UI).
+Full request/response examples at **`/api`** (Swagger UI).
 
 ---
 
 ## Design decisions
 
+### Fire-and-forget ingest
+
+`POST /transcripts` validates input, persists the record, enqueues a background job, and returns `{ id, status: "pending" }` immediately. The caller polls `GET /transcripts/:id` until `status` reaches `"completed"` or `"failed"`.
+
+**Advantage:** HTTP response times are fast and independent of LLM latency (which can be 5–30 s).  
+**Disadvantage:** Callers must implement polling. A webhook or SSE push would be better UX but adds infrastructure complexity.
+
+---
+
 ### Two-layer idempotency
 
-Duplicate transcripts (identical content) are handled at two independent layers:
+Duplicate transcripts (same content, submitted more than once) are caught at two independent layers:
 
-| Layer | Mechanism                                                        | What it catches                               |
-| ----- | ---------------------------------------------------------------- | --------------------------------------------- |
-| 1     | SHA-256 content hash + `@unique` DB index                        | Duplicate HTTP submissions                    |
-| 2     | BullMQ `jobId = transcriptId`                                    | Duplicate queue entries if enqueue is retried |
-| 3     | CAS `updateMany({ where: { status: 'pending' } })` in the worker | Concurrent worker startup for the same job    |
+| Layer | Mechanism | What it prevents |
+|---|---|---|
+| 1 | SHA-256 `contentHash` + `@unique` DB index + BullMQ `jobId = transcriptId` | Duplicate HTTP submissions and duplicate queue entries |
+| 2 | CAS `updateMany({ where: { status: { in: ['pending', 'failed'] } } })` inside the worker | Two workers racing on the same job |
 
-Even if the same transcript is submitted simultaneously from multiple clients, exactly one extraction job runs and exactly one set of memory files is written.
+**Known gap:** If a worker calls the LLM successfully but crashes before writing to storage, the retry will call the LLM again for the same transcript — wasted API spend, but no incorrect data (the file merge is itself idempotent). The fix is a Redis `SET NX` lock keyed on `transcriptId` around the LLM call, with a TTL slightly longer than max LLM response time. This was left out to keep complexity low.
 
-### Async processing with polling
+---
 
-`POST /transcripts` returns `{ id, status: "pending" }` immediately and enqueues an async job. Callers poll `GET /transcripts/:id` until `status` is `"completed"` or `"failed"`. This keeps HTTP response times fast and decouples ingest throughput from LLM latency.
+### One file per entity
+
+Each person, company, topic, and location gets its own Markdown file rather than storing everything in one large document.
+
+**Advantage:** `GET /memories/grep` can scope searches to a specific directory (`people/`, `topics/`) and return per-file excerpts. Files stay small and focused.  
+**Disadvantage:** A transcript mentioning 10 people and 5 topics produces up to 15 file reads/writes. At scale this creates a large number of small objects in storage, which is not ideal for S3 cost or listing performance.
+
+---
 
 ### LLM structured output
 
-GPT-4o is called with `response_format: { type: "json_schema" }` and a strict schema covering people, companies, locations, topics, facts, sentiment, and timeline. Structured output eliminates prompt engineering for JSON formatting and makes parsing deterministic. `parseExtractedMemories` is a pure function that applies safe defaults for missing arrays so a partial LLM response never crashes the worker.
+The LLM is called with a strict JSON schema (`response_format: json_schema` for OpenAI; `responseMimeType: application/json` + `responseSchema` for Gemini). This forces the model to return a predictable structure covering people, companies, locations, topics, facts, sentiment, and timeline — no prompt engineering needed to get JSON out.
 
-### Append-only markdown merge
-
-Memory files are never overwritten. New extractions are appended as dated blocks. The service reads each target file from MinIO, merges new information in, and writes the result back. A `### date` duplicate-guard means retrying a failed job does not double-write the same block.
-
-### Path-style S3 for MinIO compatibility
-
-The AWS S3 SDK is configured with `forcePathStyle: true`. MinIO uses path-based URLs (`http://minio:9000/bucket/key`) rather than virtual-hosted URLs, so this flag is required for local development. In production against real AWS S3, remove this flag.
-
-### BullMQ retry configuration
-
-Jobs are configured with `attempts: 3` and exponential back-off starting at 2 s. Failed jobs remain in the queue's failed set (`removeOnFail: false`) so they can be inspected and retried manually. Successful jobs are removed (`removeOnComplete: true`) to keep the Redis memory footprint small.
+**Advantage:** Parsing is deterministic; a well-typed `parseExtractedMemories` function with safe array defaults means a partial LLM response never crashes the worker.  
+**Disadvantage:** The structured constraint limits what the LLM can express. Free-form text responses carry more nuance, but they are much harder to parse reliably.
 
 ---
 
-## Assumptions
+### Multi-provider LLM
 
-- **OpenAI GPT-4o is available.** The extraction schema relies on `response_format: json_schema`, which requires at least GPT-4o. Older models are not supported without removing the schema constraint.
-- **Transcripts are plain text.** No audio transcription or PDF parsing is included.
-- **Single tenant.** All memory files share one MinIO bucket. Multi-tenancy would require per-tenant bucket prefixes.
-- **Redis is the BullMQ transport.** Swapping to another queue backend requires only changing `BullModule` configuration.
-- **Memory extraction is best-effort.** A failed job (after 3 retries) leaves the transcript in `failed` status without losing the original content.
+The LLM adapter is selected at startup via `LLM_PROVIDER=openai|gemini`. Both adapters implement the same `LlmClient` interface (`complete(transcript): Promise<string>`), so `LlmService` is provider-agnostic. Switching providers is a single env-var change with no code change.
 
 ---
 
-## Test strategy
+### MinIO instead of real S3
+
+MinIO runs as a Docker service and implements the full S3 API. The AWS S3 SDK is pointed at it with `forcePathStyle: true`. In production, remove that flag and point `MINIO_ENDPOINT` at a real AWS endpoint — no application code changes required.
+
+**Advantage:** Zero cloud cost or account setup for local development.  
+**Disadvantage:** MinIO's behaviour can differ subtly from real S3 on edge cases (ACLs, versioning, lifecycle rules). These differences don't affect this service but are worth noting for future features.
+
+---
+
+### Single queue consumer
+
+`MemoryProcessorService` consumes the `transcript` queue directly. A two-stage fan-out (ingest queue → memory queue + other queues) was considered and rejected: there is currently only one concern on transcript ingest, so adding a second queue buys complexity without benefit. When a second downstream action is needed (webhooks, search indexing), the refactor to fan-out is straightforward with BullMQ.
+
+---
+
+## Testing strategy
 
 ### Unit tests — `npm test`
 
-Each service is tested in isolation with Jest mocks. 100 tests across 9 suites.
-
-Key coverage:
+Services are tested in isolation with Jest mocks. Key coverage:
 
 - `LlmService.parseExtractedMemories` — valid, partial, empty, malformed JSON, extra fields
-- `MemoryWriterService` — `toSlug`, all four `build*Content` methods (new + merge + duplicate-date guard), exact S3 key structure for every entity type
+- `MemoryWriterService` — slug generation, all content builders, exact S3 key structure, duplicate-date guard
 - `MemoryProcessorService` — CAS idempotency, retry-on-failure, duplicate job skip
-- `StorageService` — `listFiles` (dir/file split, prefix normalisation), `listAllFiles` (pagination via `ContinuationToken`)
-- `MemoryBrowserService` — `grep` (match, no-match, invalid regex, excerpt context), `cat` (NotFoundException)
-- Controller integration tests — HTTP validation, error codes, and service delegation
+- `StorageService` — directory/file listing, prefix normalisation, pagination via `ContinuationToken`
+- `MemoryBrowserService` — grep (match, no-match, invalid regex, excerpt context), cat (404)
+- Adapter tests — `OpenAiLlmAdapter` and `GeminiLlmAdapter` against mocked SDKs
 
 ### Integration tests — `npm run test:integration`
 
-Requires Docker services running (`docker compose up -d`). Tests the real HTTP → service → database/MinIO chain.
-
-- `transcript-ingest` — persistence, SHA-256 dedup, `GET /transcripts/:id`, 404
-- `memory-queries` — file listing, cat, grep against real MinIO with seeded fixtures; uses an isolated `memories-integration-test` bucket
+Requires Docker services running. Tests the full HTTP → service → PostgreSQL / MinIO chain with real infrastructure and isolated test buckets.
 
 ### E2E test — `npm run test:e2e`
 
-Requires the full Docker Compose stack. Boots the entire NestJS application with mocked OpenAI and exercises the complete flow end-to-end:
-
-1. `POST /transcripts`
-2. Poll `GET /transcripts/:id` until `status === "completed"`
-3. `GET /memories/grep` and `GET /memories/cat` to verify memory files were written
-
-Uses an isolated `memories-e2e-test` bucket, cleaned up after each test.
+Boots the full NestJS application with a mocked LLM client, submits a transcript, polls until `status === "completed"`, then verifies memory files are queryable via `grep` and `cat`.
 
 ---
 
 ## What I'd do with more time
 
-| Area                  | Detail                                                                                                                                                                             |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Pagination**        | `GET /memories` uses a single S3 page (max 1000 objects). Add cursor-based pagination with `ContinuationToken`.                                                                    |
-| **SSE / webhooks**    | Replace polling with Server-Sent Events or a webhook callback so clients are pushed a notification when processing completes.                                                      |
-| **Dead-letter queue** | Route permanently failed jobs to a DLQ with alerting instead of leaving transcripts silently in `failed` status.                                                                   |
-| **Semantic search**   | Replace the regex full-scan in `grep` with an embedding index (pgvector or Qdrant) for semantic similarity search.                                                                 |
-| **Multi-tenancy**     | Namespace all S3 keys and DB records by `tenantId`. Currently the entire bucket is shared.                                                                                         |
-| **Authentication**    | Add a JWT or API-key guard. The API is currently unauthenticated.                                                                                                                  |
-| **Observability**     | Structured JSON logging with correlation IDs + OpenTelemetry traces spanning the full request → queue job → LLM call → storage write path.                                         |
-| **LLM fallback**      | Add a circuit breaker around the OpenAI call with a fallback to a secondary provider or a graceful partial extraction on timeout.                                                  |
-| **Path validation**   | Validate that `path` query params conform to expected key patterns. S3 key-space isolation provides a security boundary, but rejecting obviously malformed paths would improve UX. |
-| **Memory versioning** | Keep a `history/` copy of every file version so diffs across extractions can be inspected without parsing the markdown.                                                            |
+| Area | Detail |
+|---|---|
+| **Real-time notifications** | Replace polling with SSE or webhooks so callers are pushed a notification when processing completes |
+| **Authentication** | JWT or API-key guard so users can only access their own transcripts and memories |
+| **LLM-assisted merge** | Use a second LLM call to intelligently deduplicate and reconcile new information with what's already in a memory file, rather than appending blindly |
+| **Memory versioning** | Keep a `history/` snapshot of every file version to track how understanding of a topic evolved across transcripts |
+| **AI-rated retrieval** | Have the LLM score retrieved memory excerpts for relevance before returning them to the caller |
+| **Semantic search** | Replace the regex full-scan in `grep` with an embedding index (pgvector or Qdrant) for similarity search |
+| **Redis lock around LLM** | Add `SET NX` around the LLM call to prevent redundant API spend on retries |
+| **Dead-letter queue** | Route permanently failed jobs to a DLQ with alerting rather than leaving them silently in `failed` status |
+| **Pagination** | `GET /memories` currently reads a single S3 page (max 1,000 objects); add cursor-based pagination |
+| **Multi-tenancy** | Namespace all S3 keys and DB records by `userId`; currently the entire bucket is shared |
 
 ---
 
 ## Environment variables
 
-| Variable           | Required | Default     | Description                                   |
-| ------------------ | -------- | ----------- | --------------------------------------------- |
-| `DATABASE_URL`     | Yes      | —           | PostgreSQL connection string                  |
-| `REDIS_HOST`       | Yes      | `localhost` | Redis hostname                                |
-| `REDIS_PORT`       | No       | `6379`      | Redis port                                    |
-| `MINIO_ENDPOINT`   | Yes      | —           | MinIO endpoint URL (e.g. `http://minio:9000`) |
-| `MINIO_ACCESS_KEY` | Yes      | —           | MinIO / S3 access key                         |
-| `MINIO_SECRET_KEY` | Yes      | —           | MinIO / S3 secret key                         |
-| `MINIO_BUCKET`     | No       | `memories`  | Target bucket name                            |
-| `OPENAI_API_KEY`   | Yes      | —           | OpenAI API key                                |
-| `OPENAI_MODEL`     | No       | `gpt-4o`    | Model used for extraction                     |
-| `PORT`             | No       | `3000`      | HTTP listen port                              |
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DATABASE_URL` | Yes | — | PostgreSQL connection string |
+| `REDIS_HOST` | Yes | `localhost` | Redis hostname |
+| `REDIS_PORT` | No | `6379` | Redis port |
+| `MINIO_ENDPOINT` | Yes | — | MinIO / S3 endpoint (e.g. `http://minio:9000`) |
+| `MINIO_ACCESS_KEY` | Yes | — | Access key |
+| `MINIO_SECRET_KEY` | Yes | — | Secret key |
+| `MINIO_BUCKET` | No | `memories` | Target bucket name |
+| `LLM_PROVIDER` | No | `openai` | `openai` or `gemini` |
+| `OPENAI_API_KEY` | If `LLM_PROVIDER=openai` | — | OpenAI API key |
+| `OPENAI_MODEL` | No | `gpt-4o` | OpenAI model name |
+| `GEMINI_API_KEY` | If `LLM_PROVIDER=gemini` | — | Google Gemini API key |
+| `GEMINI_MODEL` | No | `gemini-2.0-flash` | Gemini model name |
+| `PORT` | No | `3000` | HTTP listen port |
